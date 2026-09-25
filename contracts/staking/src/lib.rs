@@ -302,9 +302,10 @@ impl Staking {
             .persistent()
             .extend_ttl(&key_debt, MIN_TTL, BUMP_TO);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
             (Symbol::new(&env, "lock_extended"),),
-            (staker, boost, expiry),
+            (staker, boost, expiry)
         );
     }
 
@@ -374,8 +375,11 @@ impl Staking {
             .instance()
             .set(&DataKey::RewardPoolBalance, &new_balance);
         // Emit event with the actual amount added
-        env.events()
-            .publish((Symbol::new(&env, "rewards_added"),), (admin, received));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "rewards_added"),),
+            (admin, received)
+        );
     }
 
     /// Halt new stakes and reward claims. Admin only (#360).
@@ -389,8 +393,7 @@ impl Staking {
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         assert!(admin == stored_admin, "not admin");
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events()
-            .publish((Symbol::new(&env, "paused"),), (admin,));
+        soroban_amm_sdk::emit_versioned_event!(env, (Symbol::new(&env, "paused"),), (admin,));
     }
 
     /// Resume staking and claiming. Admin only (#360).
@@ -400,8 +403,7 @@ impl Staking {
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         assert!(admin == stored_admin, "not admin");
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.events()
-            .publish((Symbol::new(&env, "unpaused"),), (admin,));
+        soroban_amm_sdk::emit_versioned_event!(env, (Symbol::new(&env, "unpaused"),), (admin,));
     }
 
     /// Whether the contract is currently paused (#360).
@@ -538,9 +540,10 @@ impl Staking {
             .persistent()
             .extend_ttl(&key_debt, MIN_TTL, BUMP_TO);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
             (Symbol::new(&env, "staked"),),
-            (staker, amount, new_boost, new_expiry),
+            (staker, amount, new_boost, new_expiry)
         );
     }
 
@@ -642,8 +645,11 @@ impl Staking {
             .persistent()
             .extend_ttl(&key_debt, MIN_TTL, BUMP_TO);
 
-        env.events()
-            .publish((Symbol::new(&env, "unstaked"),), (staker, amount, rewards));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "unstaked"),),
+            (staker, amount, rewards)
+        );
         (amount, rewards)
     }
 
@@ -661,8 +667,11 @@ impl Staking {
         env.storage()
             .instance()
             .set(&DataKey::EmergencyMode, &enabled);
-        env.events()
-            .publish((Symbol::new(&env, "emergency_mode"),), (admin, enabled));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "emergency_mode"),),
+            (admin, enabled)
+        );
     }
 
     /// Set the optional maximum reward pool balance. Admin only.
@@ -684,9 +693,10 @@ impl Staking {
         env.storage()
             .instance()
             .set(&DataKey::ConfigMaxRewardPoolBalance, &max_balance);
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
             (Symbol::new(&env, "max_reward_pool_balance_set"),),
-            (admin, max_balance),
+            (admin, max_balance)
         );
     }
 
@@ -762,9 +772,10 @@ impl Staking {
         let pool_addr = env.current_contract_address();
         SepTokenClient::new(&env, &lp_token).transfer(&pool_addr, &staker, &staked_amount);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
             (Symbol::new(&env, "emergency_withdraw"),),
-            (staker, staked_amount),
+            (staker, staked_amount)
         );
         staked_amount
     }
@@ -1071,9 +1082,10 @@ impl Staking {
             .persistent()
             .extend_ttl(&key_debt, MIN_TTL, BUMP_TO);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
             (Symbol::new(&env, "boost_exp"),),
-            (staker, stored_boost, min_boost),
+            (staker, stored_boost, min_boost)
         );
     }
 
@@ -1179,9 +1191,10 @@ impl Staking {
         } else {
             // Publish a lightweight event to record the clamping for
             // observability in tests and off-chain tooling.
-            env.events().publish(
+            soroban_amm_sdk::emit_versioned_event!(
+                env,
                 (Symbol::new(&env, "rewards_clamped"),),
-                (new_rewards, pool_balance),
+                (new_rewards, pool_balance)
             );
             pool_balance
         };
@@ -1199,13 +1212,19 @@ impl Staking {
                 .instance()
                 .set(&DataKey::RewardPoolBalance, &(pool_balance - distributable));
 
-            env.events()
-                .publish((Symbol::new(&env, "rewards_updated"),), (distributable,));
+            soroban_amm_sdk::emit_versioned_event!(
+                env,
+                (Symbol::new(&env, "rewards_updated"),),
+                (distributable,)
+            );
         } else {
             // No distributable amount: emit updated with zero to keep a
             // consistent event surface and return early.
-            env.events()
-                .publish((Symbol::new(&env, "rewards_updated"),), (0_i128,));
+            soroban_amm_sdk::emit_versioned_event!(
+                env,
+                (Symbol::new(&env, "rewards_updated"),),
+                (0_i128,)
+            );
         }
     }
 
@@ -1246,8 +1265,11 @@ impl Staking {
             .instance()
             .set(&DataKey::RewardPoolBalance, &(pool_balance - pending));
 
-        env.events()
-            .publish((Symbol::new(env, "claimed"),), (staker.clone(), pending));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(env, "claimed"),),
+            (staker.clone(), pending)
+        );
         pending
     }
 
@@ -1452,8 +1474,11 @@ impl Staking {
             .instance()
             .set(&DataKey::RewardPoolBalance, &(pool_balance - pending));
 
-        env.events()
-            .publish((Symbol::new(env, "claimed"),), (staker.clone(), pending));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(env, "claimed"),),
+            (staker.clone(), pending)
+        );
     }
 }
 
