@@ -768,10 +768,8 @@ impl Governance {
                     return Err(GovernanceError::InvalidFeeBps);
                 }
             }
-            ProposalKind::TransferAdmin(_new_admin) => {}
             ProposalKind::PausePool => {}
             ProposalKind::UnpausePool => {}
-            ProposalKind::EmergencyWithdraw(_) => {}
             ProposalKind::UpdateFactoryTreasury(params) => {
                 if !(0..=MAX_BPS).contains(&params.global_protocol_fee_bps) {
                     return Err(GovernanceError::InvalidFeeBps);
@@ -785,10 +783,6 @@ impl Governance {
                     return Err(GovernanceError::PartialFactoryUpdate);
                 }
             }
-            ProposalKind::CreatePolVesting(_) => {}
-            ProposalKind::PauseClPool(_) => {}
-            ProposalKind::UnpauseClPool(_) => {}
-            ProposalKind::UpdateClOracle(_) => {}
             ProposalKind::UpdateClMaxOracleDeviation(params) => {
                 if !(0..=MAX_BPS).contains(&params.max_deviation_bps) {
                     return Err(GovernanceError::InvalidFeeBps);
@@ -865,9 +859,10 @@ impl Governance {
 
         // Use total_supply_at to get the supply at snapshot_ledger, preventing
         // quorum manipulation by same-ledger mint/burn.
-        let snapshot_total_supply = lp_client
-            .total_supply_at(&snapshot_ledger)
-            .map_err(|_| GovernanceError::InsufficientSnapshotBal)?;
+        let snapshot_total_supply = match lp_client.try_total_supply_at(&snapshot_ledger) {
+            Ok(Ok(s)) => s,
+            _ => return Err(GovernanceError::InsufficientSnapshotBal),
+        };
         if snapshot_total_supply == 0 {
             return Err(GovernanceError::ZeroTotalSupply);
         }
@@ -5086,10 +5081,13 @@ mod prop_tests {
         lp.mint(&other, &4_000_i128);
 
         // Advance to ledger 10
-        s.env.ledger().set(10, 10_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 10;
+            l.timestamp = 10_000;
+        });
 
-        // Holder removes all liquidity in ledger 10
-        lp.burn(&holder, &6_000_i128);
+        // Holder removes liquidity in ledger 10 (keeping 1 token to meet min_stake)
+        lp.burn(&holder, &5_999_i128);
 
         // Propose in the same ledger - snapshot is ledger 9
         let pid = gov.propose(&holder, &ProposalKind::UpdateFee(50));
@@ -5112,7 +5110,10 @@ mod prop_tests {
         lp.mint(&holder, &1_000_i128);
 
         // Advance to ledger 10
-        s.env.ledger().set(10, 10_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 10;
+            l.timestamp = 10_000;
+        });
 
         // Propose - snapshot is ledger 9
         let pid = gov.propose(&holder, &ProposalKind::UpdateFee(50));
@@ -5139,19 +5140,31 @@ mod prop_tests {
         let holder = Address::generate(&s.env);
 
         // Mint at ledger 1
-        s.env.ledger().set(1, 1_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 1;
+            l.timestamp = 1_000;
+        });
         lp.mint(&holder, &1_000_i128);
 
         // Mint at ledger 2
-        s.env.ledger().set(2, 2_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 2;
+            l.timestamp = 2_000;
+        });
         lp.mint(&holder, &500_i128);
 
         // Burn at ledger 3
-        s.env.ledger().set(3, 3_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 3;
+            l.timestamp = 3_000;
+        });
         lp.burn(&holder, &200_i128);
 
         // Propose at ledger 4 - snapshot is ledger 3
-        s.env.ledger().set(4, 4_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 4;
+            l.timestamp = 4_000;
+        });
         let pid = gov.propose(&holder, &ProposalKind::UpdateFee(50));
 
         let proposal = gov.get_proposal(&pid);
@@ -5160,9 +5173,9 @@ mod prop_tests {
         assert_eq!(proposal.snapshot_ledger, 3);
 
         // Verify total_supply_at returns correct values for each ledger
-        assert_eq!(lp.total_supply_at(&1), Ok(1_000));
-        assert_eq!(lp.total_supply_at(&2), Ok(1_500));
-        assert_eq!(lp.total_supply_at(&3), Ok(1_300));
+        assert_eq!(lp.total_supply_at(&1), 1_000);
+        assert_eq!(lp.total_supply_at(&2), 1_500);
+        assert_eq!(lp.total_supply_at(&3), 1_300);
     }
 
     #[test]
@@ -5175,7 +5188,10 @@ mod prop_tests {
         let holder = Address::generate(&s.env);
         lp.mint(&holder, &1_000_i128);
 
-        s.env.ledger().set(10, 10_000);
+        s.env.ledger().with_mut(|l| {
+            l.sequence_number = 10;
+            l.timestamp = 10_000;
+        });
 
         // Invalid CreatePolVesting: total <= 0
         let pol_vesting = Address::generate(&s.env);
@@ -5255,6 +5271,8 @@ mod prop_tests {
             cliff_ledger: 30,
             end_ledger: 40,
         };
-        assert!(gov.try_propose(&holder, &ProposalKind::CreatePolVesting(valid_vesting)).is_ok());
+        assert!(gov
+            .try_propose(&holder, &ProposalKind::CreatePolVesting(valid_vesting))
+            .is_ok());
     }
 }
