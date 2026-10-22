@@ -12,6 +12,7 @@
 
 | Date | Commit | Change |
 |------|--------|--------|
+| 2026-10-04 | — | Added M-04: the k-of-n emergency guard could be disabled by the admin it guards, and emergency withdrawals had no pause precondition or delay. Recorded the fix and the new announce/delay flow. |
 | 2026-09-27 | `74d227f` | Re-verified every finding against the current source. Moved the fixed findings to [§2.6 Resolved findings](#26-resolved-findings), with the fixing change and current location for each. Added M-03 (the residual gap from M-02 in `initialize`). Listed the unreviewed concentrated-liquidity surfaces in §3. |
 | 2026-10-22 | #1107 | M-03 resolved: `initialize*`, `update_fee` and `set_protocol_fee` now share one fee-pair validator. |
 | — | `66a4643` | Original constant-product review. |
@@ -41,6 +42,7 @@
 
 | ID | Title | Severity | Status |
 |----|-------|----------|--------|
+| M-04 | Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay | Medium | **Fixed**. See §2.6 |
 | L-02 | Imbalanced deposits accept excess tokens without refund | Low | Acknowledged (by design) |
 | I-02 | No distinct event for the first deposit | Informational | Open (informational) |
 | M-03 | `initialize` accepts `protocol_fee_bps == fee_bps` | Medium | Fixed. See §2.6 |
@@ -65,7 +67,7 @@ No open high-severity findings. H-01 is resolved (see §2.6).
 
 ### 2.3 Medium
 
-No open medium findings. M-02 and M-03 are resolved (see §2.6).
+No open medium findings. M-02, M-03 and M-04 are resolved (see §2.6).
 
 ---
 
@@ -163,6 +165,25 @@ three callers. Regression tests are in `contracts/amm/src/tests.rs`
 (`test_fee_entry_points_accept_exactly_the_same_pairs` and the
 `test_initialize_*` / `test_update_fee_*` tests) and
 `contracts/integration-tests/src/governance_locker_test.rs`.
+
+#### M-04 — Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay — **Fixed**
+
+**Original finding:** `set_multisig(admin, [], 0)` required only the stored
+admin's authorization, and `emergency_withdraw` refused only while
+`MultisigQuorum > 0`, so a single admin could disable the guard and drain the
+pool in the same ledger. `emergency_withdraw` had no pause precondition and no
+delay, and `exec_multisig_emergency_wd` executed as soon as quorum was reached.
+Accrued protocol fees were left behind, and several failures returned
+misleading error variants.
+**Fix:** While `MultisigQuorum > 0` the guard can only be changed through the
+multisig. Single-admin withdrawals require a prior
+`announce_emergency_withdraw` and a paused pool, and wait the emergency delay
+(default 24 h, capped at 7 days). The multisig path waits the same delay from
+quorum and also requires a paused pool. Both paths sweep accrued fees and reject
+`to == pool` and `to == lp_token`. New `QuorumNotReached`, `InvalidQuorum`,
+`EmergencyDelayNotElapsed`, `InvalidRecipient`, `MultisigGuardActive` and
+`InvalidEmergencyDelay` variants were appended.
+**Status:** Fixed.
 
 #### L-01 — `withdraw_protocol_fees` missing closing brace causes dead code — **Fixed**
 
@@ -268,6 +289,10 @@ fee tiers exercised by the fuzz suite. As of `74d227f`, all of the original
 high, medium and low findings for that pool are fixed or acknowledged. One
 informational item (I-02) remains open; the residual initializer gap from M-02
 (M-03) is resolved.
+
+The emergency path was hardened after `74d227f` (M-04): the k-of-n guard can no
+longer be disabled by the admin it guards, and emergency withdrawals now
+require a pause and an announced delay. See §2.6.
 
 The concentrated-liquidity contract has not been reviewed. The surfaces in §3
 must be reviewed before that contract handles significant value. Read this

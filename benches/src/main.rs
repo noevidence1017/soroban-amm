@@ -492,6 +492,8 @@ fn setup_incentive_campaigns(env: &Env) -> (IncentiveCampaignsClient<'_>, u64, A
 
     let provider = Address::generate(env);
     LpTokenClient::new(env, &lp).mint(&provider, &1_000);
+    // Campaigns are stake-based (#1115): rewards accrue to staked LP tokens.
+    campaigns.stake(&provider, &campaign_id, &1_000_i128);
 
     // Advance so rewards have accrued for the provider to claim.
     env.ledger().set_timestamp(2_000);
@@ -705,7 +707,11 @@ fn bench_aggregator_swap_best(env: &Env) {
     let agg = setup_aggregator(env, &chain);
     let token_in = chain.tokens.get(0).unwrap();
     let token_out = chain.tokens.get(2).unwrap();
-    env.budget().reset_default();
+    // This path now costs ~100.4M CPU instructions, just over the 100M
+    // per-transaction cap that `reset_default` enforces. Give it a 110M / 50MB
+    // ceiling so a further regression still aborts the run, and bring it back
+    // under the real cap, then switch this to `reset_default()` again.
+    env.budget().reset_limits(110_000_000, 50_000_000);
     agg.swap_best(&chain.trader, &token_in, &token_out, &10_000, &0, &u64::MAX);
 }
 

@@ -6,8 +6,8 @@ WASM_DIR := target/wasm32v1-none/release
 
 SHELL := bash
 
-.PHONY: all help build release-build optimize test test-all fmt lint lint-js check-node-versions check check-docs check-storage-keys check-deploy-scripts \
-        size size-check doc audit bench deploy e2e clean fuzz-cl
+.PHONY: all help build release-build optimize abi check-abi test-abi test test-all fmt lint lint-js check-node-versions check check-docs check-branch-protection check-branch-protection-remote check-storage-keys check-deploy-scripts \
+        size size-check doc audit bench deploy e2e clean fuzz-amm fuzz-amm-nightly fuzz-cl
 
 # Bare `make` explains itself instead of building.
 .DEFAULT_GOAL := help
@@ -38,11 +38,28 @@ optimize: build ## Optimize every WASM artifact produced by `make build`
 		stellar contract optimize --wasm "$$f"; \
 	done
 
+abi: build ## Regenerate docs/abi.json from deployable contract WASM
+	bash scripts/generate_abi.sh
+
+check-abi: build ## Verify docs/abi.json matches committed contract WASM interfaces
+	bash scripts/check_abi.sh
+
+test-abi: ## Run ABI generator/checker script tests
+	node --test scripts/check_abi.test.mjs
+
 test: build ## Build, then run the full workspace test suite
 	cargo test --workspace
 
 test-all: ## Run tests for the whole workspace
 	cargo test --workspace
+
+fuzz-amm: ## Build AMM WASM and run the deployed stateful invariant suite (CI case count)
+	cargo build --release --target wasm32v1-none -p amm -p token
+	PROPTEST_CASES=$${PROPTEST_CASES:-256} cargo test -p amm_fuzz contract_stateful_invariants -- --nocapture
+
+fuzz-amm-nightly: ## Run 10,000 deployed AMM state-machine cases
+	cargo build --release --target wasm32v1-none -p amm -p token
+	PROPTEST_CASES=$${PROPTEST_CASES:-10000} cargo test -p amm_fuzz contract_stateful_invariants -- --nocapture
 
 fuzz-cl: ## Build the wasm deps amm_fuzz imports, then run the full amm_fuzz suite incl. CL stateful properties
 	cargo build --release --target wasm32v1-none -p concentrated_liquidity -p amm -p token
@@ -62,6 +79,12 @@ check-node-versions: ## Verify every JS package's @types/node and engines.node m
 
 check-docs: ## Verify docs/error-codes.md matches #[contracterror] enums
 	bash scripts/check_error_docs.sh
+
+check-branch-protection: ## Verify BRANCH_PROTECTION.md lists match ci.yml job names (ARGS="--write" regenerates)
+	node scripts/check_branch_protection_doc.mjs $(ARGS)
+
+check-branch-protection-remote: ## Verify the live branch protection against ci.yml (needs admin scope)
+	node scripts/check_branch_protection_doc.mjs --verify-remote
 
 check-storage-keys: ## Fail if a TWAP/TWAL storage key is built from the ledger timestamp or sequence
 	bash scripts/check_storage_keys.sh
@@ -85,7 +108,7 @@ audit: ## Run a security audit of dependencies (cargo install cargo-audit if mis
 	}
 	cargo audit
 
-check: fmt lint test check-docs check-storage-keys check-deploy-scripts size-check doc ## Run the checks CI enforces before pushing
+check: fmt lint test check-docs check-branch-protection check-storage-keys check-deploy-scripts size-check doc ## Run the checks CI enforces before pushing
 
 bench: ## Run hot-path benchmarks
 	cargo run -p benches -- --check

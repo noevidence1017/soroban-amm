@@ -49,6 +49,7 @@ Before calling `initialize`, verify:
 5. `protocol_fee_bps` is in `[0, fee_bps]`.
 6. The `fee_recipient` address is a multisig or a contract — not a single hot wallet.
 7. The `admin` address is a multisig or a governance contract for production deployments.
+8. The emergency delay is long enough for LPs to react (default 24 h, cap 7 days). To change it, initialize with `initialize_with_emergency_delay` instead of `initialize`.
 
 ```sh
 # Initialize via factory (recommended)
@@ -322,6 +323,7 @@ Key metrics to monitor for a healthy pool:
 | Total shares | `get_info().total_shares` | Sudden drop > 20% in one block |
 | Accrued fees | `get_accrued_fees()` | Exceeds a configured USD threshold |
 | Paused state | `is_paused()` | Any `true` value |
+| Emergency announcement | `emergency_announce` event, `get_emergency_announcement()` | Any announcement |
 | Circuit breaker | `get_circuit_breaker_config().tripped` | Any `true` value |
 | TWAP vs spot | `price_ratio()` vs TWAP consumer | Deviation > 5% |
 
@@ -330,13 +332,109 @@ Subscribe to on-chain events for real-time alerts:
 | Event | Meaning |
 |---|---|
 | `circuit_break` | Pool auto-paused; investigate immediately |
-| `emergency_withdraw` | Admin drained reserves; critical incident |
+| `emergency_announce` | Admin announced a drain; LPs have the emergency delay (24 h by default) to react |
+| `emergency_cancel` | Admin cancelled the announcement; no drain occurred |
+| `emergency_wd` | Admin drained reserves and accrued fees; critical incident |
+| `ms_ew` | A multisig drained reserves and accrued fees; critical incident |
 | `admin_nominated` | Admin transfer initiated; verify it is expected |
 | `admin_changed` | Admin transfer completed |
 
 ---
 
-## 10. Upgrade Procedure
+## 10. Emergency Withdrawal
+
+The emergency path moves every reserve *and* every accrued protocol fee out of the pool and leaves it in a terminal `Drained` state. Three independent layers constrain it:
+
+1. **Pause precondition.** The pool must be paused when the withdrawal executes (`Paused` error otherwise). A drain therefore always follows an observable `pause`.
+2. **Announced delay.** The admin first calls `announce_emergency_withdraw(admin, to)`, which records the recipient and the time and emits `emergency_announce`. `emergency_withdraw(admin, to)` only succeeds for that same recipient once the emergency delay has passed (24 h by default, at most 7 days, set with `initialize_with_emergency_delay`). `cancel_emergency_withdraw` clears the announcement, and announcing again restarts the delay.
+3. **k-of-n multisig guard.** While `MultisigQuorum > 0` the single-admin path is disabled (`Unauthorized`). The guard cannot be changed or disabled by the admin it constrains: `set_multisig` only installs the *initial* guard and returns `MultisigGuardActive` afterwards. Changing signers or quorum (including lowering the quorum to 0) goes through the multisig itself.
+
+**Single-admin flow:**
+
+```sh
+# 1. Announce the withdrawal (emits emergency_announce)
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- announce_emergency_withdraw \
+  --admin <ADMIN_ADDRESS> \
+  --to <RECIPIENT>
+
+# 2. Pause the pool (required before executing)
+stellar contract invoke --id <POOL> --source <ADMIN> -- pause
+
+# 3. Wait out the emergency delay (default 24 h)
+
+# 4. Execute (reserves + accrued fees reach <RECIPIENT>; emits emergency_wd)
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- emergency_withdraw \
+  --admin <ADMIN_ADDRESS> \
+  --to <RECIPIENT>
+
+# Optional: cancel before execution (emits emergency_cancel)
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- cancel_emergency_withdraw \
+  --admin <ADMIN_ADDRESS>
+```
+
+**Multisig flow.** Proposals are addressed by id; the proposer's approval is recorded automatically.
+
+```sh
+# 1. Propose; the result is the proposal id
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- propose_emergency_withdraw \
+  --signer <SIGNER_1_ADDRESS> \
+  --recipient <RECIPIENT>
+
+# 2. Other signers approve until the quorum is reached
+#    (the delay clock starts when the quorum is reached)
+stellar contract invoke --id <POOL> --source <SIGNER_2> \
+  -- approve_multisig_proposal \
+  --signer <SIGNER_2_ADDRESS> \
+  --proposal_id <ID>
+
+# 3. Pause the pool
+stellar contract invoke --id <POOL> --source <ADMIN> -- pause
+
+# 4. Once the delay has passed since quorum, any signer executes
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- exec_multisig_emergency_wd \
+  --signer <SIGNER_1_ADDRESS> \
+  --proposal_id <ID>
+```
+
+A proposal expires 7 days after it is created. Reaching the quorum extends that once so the delay cannot make it expire before it can run. Any change to the signer set invalidates proposals created under the old set (`ProposalExpired`).
+
+**Changing the guard:**
+
+```sh
+# Propose the new signer set and quorum (quorum 0 disables the guard)
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- propose_set_multisig \
+  --signer <SIGNER_1_ADDRESS> \
+  --new_signers '["<SIGNER_A>", "<SIGNER_B>", "<SIGNER_C>"]' \
+  --new_quorum 2
+
+# Signers approve with approve_multisig_proposal, then any signer executes
+# once the current quorum is reached. No delay applies to this step.
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- exec_multisig_set_multisig \
+  --signer <SIGNER_1_ADDRESS> \
+  --proposal_id <ID>
+```
+
+Read the current guard with `get_multisig` and a proposal with `get_multisig_proposal`.
+
+**Validation rules:**
+- `to` may not be the pool or its LP token (`InvalidRecipient`); otherwise funds would be stranded.
+- The pool must be paused at execution time (`Paused`).
+- The delay must have elapsed since the announcement (single-admin) or since quorum was reached (multisig); otherwise `EmergencyDelayNotElapsed`.
+- A signer set must be unique and `quorum <= signers.len()` (`InvalidQuorum`).
+- Accrued protocol fees are swept to `to` along with the reserves.
+
+**Governance.** A governance `EmergencyWithdraw` proposal runs through the same rules. Proposing it makes governance (the pool admin) announce the withdrawal, so the pool's delay runs alongside the voting period and timelock; executing it pauses the pool and then withdraws. Governance's own timelock is additive, not a substitute. Because proposing re-announces, a newer `EmergencyWithdraw` proposal replaces the announced recipient of an earlier one that has not executed yet.
+
+---
+
+## 11. Upgrade Procedure
 
 Contract upgrades replace bytecode while preserving all storage. Follow this checklist:
 

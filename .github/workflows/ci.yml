@@ -17,6 +17,7 @@ jobs:
               run: |
                   bash scripts/check_repo_hygiene.sh tracked
                   bash scripts/check_repo_hygiene.test.sh
+                  bash scripts/check_staking_deploy.test.sh
             # Channel, components and targets all come from
             # rust-toolchain.toml, so CI cannot drift onto a newer stable than
             # contributors are running; `rustup show` installs what it asks
@@ -54,6 +55,10 @@ jobs:
             # locked dependency tree the way `cargo install` would.
             - name: Install Stellar CLI
               uses: stellar/stellar-cli@v27.1.0
+            - name: Check committed ABI against contract interfaces
+              run: make check-abi
+            - name: Test ABI generator and checker
+              run: make test-abi
             - name: Optimize WASM artifacts
               shell: bash
               run: |
@@ -90,6 +95,11 @@ jobs:
               run: make check-docs
             - name: Check storage keys do not depend on the ledger clock
               run: make check-storage-keys
+            # BRANCH_PROTECTION.md must list the checks this workflow reports.
+            - name: Check branch protection doc matches the CI jobs
+              run: make check-branch-protection
+            - name: Test the branch protection checker
+              run: node --test scripts/check_branch_protection_doc.test.mjs
             # Every deployable workspace contract must have a scripts/deploy/
             # module that scripts/deploy.sh actually runs (issue #959).
             - name: Check deploy scripts cover every contract
@@ -140,6 +150,15 @@ jobs:
                   # The SDK has no third-party dependencies, so there is no go.sum to
                   # key a module cache on.
                   cache: false
+            - name: Setup Node for reference vectors
+              uses: actions/setup-node@v7
+              with:
+                  node-version-file: .nvmrc
+            - name: Check ScVal vectors against Stellar SDK
+              run: |
+                  npm ci --ignore-scripts --prefix ../../services/graphql-api
+                  node testdata/gen.mjs
+                  git diff --exit-code -- testdata/scval_vectors.json
             - name: Format check
               run: |
                   unformatted=$(gofmt -l .)
@@ -192,6 +211,9 @@ jobs:
               run: node --test scripts/check_event_schemas.test.mjs
 
     npm-packages:
+        # Explicit so the reported context is "npm-packages (<dir>)" and does not
+        # include the test command (see .github/BRANCH_PROTECTION.md).
+        name: npm-packages (${{ matrix.dir }})
         runs-on: ubuntu-latest
         permissions:
             contents: read

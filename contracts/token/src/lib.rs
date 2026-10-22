@@ -1395,7 +1395,6 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
         let bob = Address::generate(&ts.env);
-        let _carol = Address::generate(&ts.env);
 
         client.mint(&alice, &1_000_i128);
         let live_until = ts.env.ledger().sequence() + 100;
@@ -1421,14 +1420,20 @@ mod tests {
         let alice = Address::generate(&ts.env);
 
         // Mint at ledger 1
-        ts.env.ledger().set_sequence_number(1);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 1;
+            l.timestamp = 1;
+        });
         client.mint(&alice, &1_000_i128);
 
         // Query at ledger 1 should return 1000
         assert_eq!(client.total_supply_at(&1), 1_000);
 
         // Mint at ledger 2
-        ts.env.ledger().set_sequence_number(2);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 2;
+            l.timestamp = 2;
+        });
         client.mint(&alice, &500_i128);
 
         // Query at ledger 2 should return 1500
@@ -1438,7 +1443,10 @@ mod tests {
         assert_eq!(client.total_supply_at(&1), 1_000);
 
         // Burn at ledger 3
-        ts.env.ledger().set_sequence_number(3);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 3;
+            l.timestamp = 3;
+        });
         client.burn(&alice, &200_i128);
 
         // Query at ledger 3 should return 1300
@@ -1454,7 +1462,10 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
 
-        ts.env.ledger().set_sequence_number(1);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 1;
+            l.timestamp = 1;
+        });
         client.mint(&alice, &1_000_i128);
 
         // Two mints in the same ledger - the second overwrites the checkpoint
@@ -1470,11 +1481,17 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
 
+        // 2 x 1100 contract calls exceed the default per-test budget.
+        ts.env.budget().reset_unlimited();
+
         // Create enough checkpoints to trigger truncation
-        for i in 0..(LpToken::MAX_CHECKPOINTS + 1) {
-            ts.env.ledger().set_sequence_number(i + 1);
+        for i in 0..1100_u32 {
+            ts.env.ledger().with_mut(|l| {
+                l.sequence_number = i;
+                l.timestamp = u64::from(i);
+            });
             client.mint(&alice, &1_i128);
-            ts.env.budget().reset_default();
+            client.burn(&alice, &1_i128);
         }
 
         // Query a ledger before the truncation point should return error
